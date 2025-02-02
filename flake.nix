@@ -3,38 +3,62 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
   outputs =
-    { self, nixpkgs, flake-utils }:
-    let
-      systems = [ "aarch64-linux" "i686-linux" "x86_64-linux" ];
-    in
-    flake-utils.lib.eachSystem systems (
-      system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        themeNames = builtins.attrNames (builtins.readDir ./assets/backgrounds);
-        themePackages = builtins.listToAttrs (builtins.map
-          (theme:
-            let name = (builtins.head (pkgs.lib.strings.splitString "." theme)); in {
-              name = name + "-grub-theme";
-              value = pkgs.callPackage ./build/default.nix { theme = name; };
-            })
-          themeNames);
-      in
-      {
-        packages = {
-          default = pkgs.callPackage ./build/default.nix { theme = "nixos"; };
-        } // themePackages;
+    { nixpkgs, flake-parts, ... }@inputs:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [
+        "aarch64-linux"
+        "i686-linux"
+        "x86_64-linux"
+      ];
 
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [ nixd nixpkgs-fmt act jq ];
+      perSystem =
+        {
+          lib,
+          pkgs,
+          system,
+          ...
+        }:
+        let
+          inherit (lib) splitString removeSuffix mapAttrs';
+          inherit (pkgs) callPackage mkShell;
+
+          mkThemePackage = theme: callPackage ./build/default.nix { inherit theme; };
+
+          themes = mapAttrs' (fileName: _: rec {
+            name = ''${builtins.head (splitString "." fileName)}-grub-theme'';
+            value = mkThemePackage (removeSuffix "-grub-theme" name);
+          }) (builtins.readDir ./assets/backgrounds);
+        in
+        {
+          _module.args.pkgs = nixpkgs.legacyPackages.${system};
+
+          packages = {
+            default = mkThemePackage "nixos";
+          } // themes;
+
+          checks = themes;
+
+          devShells = {
+            default = mkShell {
+              name = "distro-grub-themes";
+              nativeBuildInputs = with pkgs; [
+                nixd
+                nixpkgs-fmt
+                act
+                jq
+              ];
+            };
+          };
         };
 
-        nixosModules.default = ./build/module.nix;
-      }
-    );
+      flake = {
+        nixosModules = {
+          default = ./build/module.nix;
+        };
+      };
+    };
 }
- 
